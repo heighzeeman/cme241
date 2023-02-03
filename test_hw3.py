@@ -58,7 +58,7 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
                         for transfer in range(-alpha0, alpha1 + 1):
                             base_rewards = -self.transfer_cost*abs(transfer) -\
                                              self.holding_costs[0]*min(alpha0+transfer, alpha0) -\
-                                             self.holding_costs[1]*min(alpha1+transfer, alpha1)
+                                             self.holding_costs[1]*min(alpha1-transfer, alpha1)
                             new_ips = ips[0]+transfer, ips[1]-transfer
                             for order0 in range(self.capacities[0] - new_ips[0] + 1):
                                 for order1 in range(self.capacities[1] - new_ips[1] + 1):
