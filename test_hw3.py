@@ -30,12 +30,14 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
         poisson_lambdas: Tuple[float, float],
         holding_costs: Tuple[float, float],
         stockout_costs: Tuple[float, float],
+        supply_cost: float,
         transfer_cost: float
     ):
         self.capacities: Tuple[int, int] = capacities
         self.poisson_lambdas: Tuple[float, float] = poisson_lambdas
         self.holding_costs: Tuple[float, float] = holding_costs
         self.stockout_costs: Tuple[float, float] = stockout_costs
+        self.supply_cost = supply_cost
         self.transfer_cost = transfer_cost
 
         self.poisson_distrs = poisson(poisson_lambdas[0]), poisson(poisson_lambdas[1])
@@ -63,12 +65,13 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
                             for order0 in range(self.capacities[0] - new_ips[0] + 1):
                                 for order1 in range(self.capacities[1] - new_ips[1] + 1):
                                     action = order0, order1, transfer
+                                    new_base_rewards = base_rewards - self.supply_cost*(order0 + order1)
                                     sr_probs_dict: Dict[Tuple[InventoryState, float], float] = {}
                                     for i0 in range(new_ips[0]):
                                         for i1 in range(new_ips[1]):
                                             next_state_alphas = new_ips[0]-i0, new_ips[1]-i1
                                             next_state = InventoryState(next_state_alphas, action[:2])
-                                            sr_probs_dict[(next_state, base_rewards)] =\
+                                            sr_probs_dict[(next_state, new_base_rewards)] =\
                                               self.poisson_distrs[0].pmf(i0) * self.poisson_distrs[1].pmf(i1)
                                               
                                     # 3 cases remaining       
@@ -80,7 +83,7 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
                                     for i1 in range(new_ips[1]):
                                         next_state_alphas = 0, new_ips[1]-i1
                                         next_state = InventoryState(next_state_alphas, action[:2])
-                                        reward = base_rewards - self.stockout_costs[0] *\
+                                        reward = new_base_rewards - self.stockout_costs[0] *\
                                             (probs[0] * (self.poisson_lambdas[0] - new_ips[0]) +\
                                             new_ips[0] * self.poisson_distrs[0].pmf(new_ips[0]))
                                         sr_probs_dict[(next_state, reward)] = probs[0] *\
@@ -90,14 +93,14 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
                                     for i0 in range(new_ips[0]):
                                         next_state_alphas = new_ips[0]-i0, 0
                                         next_state = InventoryState(next_state_alphas, action[:2])
-                                        reward = base_rewards - self.stockout_costs[1] *\
+                                        reward = new_base_rewards - self.stockout_costs[1] *\
                                             (probs[1] * (self.poisson_lambdas[1] - new_ips[1]) +\
                                             new_ips[1] * self.poisson_distrs[1].pmf(new_ips[1]))
                                         sr_probs_dict[(next_state, reward)] = probs[1] *\
                                           self.poisson_distrs[0].pmf(i0)
                                     
                                     # Case 3 : i0 == new_ips[0], i1 == new_ips[1]
-                                    reward = base_rewards - self.stockout_costs[1] *\
+                                    reward = new_base_rewards - self.stockout_costs[1] *\
                                             (probs[1] * (self.poisson_lambdas[1] - new_ips[1]) +\
                                             new_ips[1] * self.poisson_distrs[1].pmf(new_ips[1])) -\
                                             self.stockout_costs[0] * probs[0] *\
@@ -119,6 +122,7 @@ if __name__ == '__main__':
     user_poisson_lambdas = 1.0, 1.0
     user_holding_costs = 1.0, 1.0
     user_stockout_costs = 10.0, 10.0
+    user_supply_cost = 0.5
     user_transfer_cost = 0.5
 
     user_gamma = 0.9
@@ -129,6 +133,7 @@ if __name__ == '__main__':
             poisson_lambdas=user_poisson_lambdas,
             holding_costs=user_holding_costs,
             stockout_costs=user_stockout_costs,
+            supply_cost=user_supply_cost,
             transfer_cost=user_transfer_cost
         )
 
