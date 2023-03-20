@@ -118,12 +118,12 @@ class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, Tuple
 if __name__ == '__main__':
     from pprint import pprint
 
-    user_capacities = 3, 3
-    user_poisson_lambdas = 1.0, 1.0
+    user_capacities = 3, 4
+    user_poisson_lambdas = 1.0, 2.0
     user_holding_costs = 1.0, 1.0
-    user_stockout_costs = 10.0, 10.0
-    user_supply_cost = 0.5
-    user_transfer_cost = 0.5
+    user_stockout_costs = 10.0, 10000.0
+    user_supply_cost = 2.0
+    user_transfer_cost = 2.5
 
     user_gamma = 0.9
 

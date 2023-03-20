@@ -215,11 +215,11 @@ if __name__ == '__main__':
     print({s.state: a_opt_policy_pi.act(s).value for s in si_mdp.non_terminal_states})
     print()
     
-    print("MDP Value Iteration Optimal Value Function and Optimal Policy")
+    print("MDP Policy Iteration Optimal Value Function and Optimal Policy")
     print("--------------")
-    opt_vf_vi, opt_policy_vi = value_iteration_result(si_mdp, gamma=user_gamma)
-    pprint(opt_vf_vi)
-    print(opt_policy_vi)
+    opt_vf_pi, opt_policy_pi = policy_iteration_result(si_mdp, gamma=user_gamma)
+    pprint(opt_vf_pi)
+    print(opt_policy_pi)
     print()
     
 
