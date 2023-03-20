@@ -580,8 +580,8 @@ When next state's ($S_{t+1}$) On-Hand is equal to zero, there are two possibilit
 2. The demand for the day was strictly greater than $\alpha + \beta$, meaning there's some stockout cost in addition to overnight holding cost. The exact stockout cost is an expectation calculation involving the number of units of missed demand under the corresponding Poisson probabilities of demand exceeding $\alpha + \beta$.
 
 This calculation is shown below:
-$$\mathcal{R}_T((\alpha, \beta), \theta, (0, \theta)) = - h \alpha - p (\sum_{j=\alpha+\beta+1}^{\infty} f(j) \cdot (j - (\alpha + \beta)))$$
- $$= - h \alpha - p (\lambda (1 - F(\alpha + \beta - 1)) -  (\alpha + \beta)(1 - F(\alpha + \beta)))$$ 
+$$\mathcal{R}_T((\alpha, \beta), \theta, (0, \theta)) = - h \alpha - p \frac {\sum_{j=\alpha+\beta+1}^{\infty} f(j) \cdot (j - (\alpha + \beta))} {\sum_{j=\alpha + \beta}^{\infty} f(j)}$$
+ $$= - h \alpha - p (\lambda -  (\alpha + \beta) (1 - \frac{f(\alpha + \beta)} {1 - F(\alpha + \beta - 1)}))$$ 
 
 So now we have a specification of $\mathcal{R}_T$, but when it comes to our coding interface, we are expected to specify $\mathcal{P}_R$ as that is the interface through which we create a `FiniteMarkovDecisionProcess`. Fear not—a specification of $\mathcal{P}_R$ is easy once we have a specification of $\mathcal{R}_T$. We simply create 5-tuples $(s,a,r,s',p)$ for all $s \in \mathcal{N}, s' \in \mathcal{S}, a \in \mathcal{A}$ such that $r=\mathcal{R}_T(s,a,s')$ and $p=\mathcal{P}(s,a,s')$ (we know $\mathcal{P}$ along with $\mathcal{R}_T$), and the set of all these 5-tuples (for all $s \in \mathcal{N}, s'\in \mathcal{S}, a \in \mathcal{A}$) constitute the specification of $\mathcal{P}_R$, i.e., $\mathcal{P}_R(s,a,r,s') = p$. This turns our reward-definition-altered mathematical model of a Finite Markov Decision Process into a programming model of the `FiniteMarkovDecisionProcess` class. This reward-definition-altered model enables us to gain from the fact that we can leverage the algorithms we'll be writing for Finite Markov Decision Processes (specifically, the classical Dynamic Programming algorithms—covered in Chapter [-@sec:dp-chapter]). The downside of this reward-definition-altered model is that it prevents us from generating sampling traces of the specific rewards encountered when transitioning from one state to another (because we no longer capture the probabilities of individual reward outcomes). Note that we can indeed perform simulations, but each transition step in the sampling trace will only show us the "mean reward" (specifically, the expected reward conditioned on current state, action and next state).
 
@@ -634,9 +634,9 @@ class SimpleInventoryMDPCap(FiniteMarkovDecisionProcess[InventoryState, int]):
                          self.poisson_distr.pmf(i) for i in range(ip)}
 
                     probability: float = 1 - self.poisson_distr.cdf(ip - 1)
-                    reward: float = base_reward - self.stockout_cost *\
-                        (probability * (self.poisson_lambda - ip) +
-                         ip * self.poisson_distr.pmf(ip))
+                    reward: float = base_reward - self.stockout_cost * \
+                        (self.poisson_lambda - ip * 
+                        (1 - self.poisson_distr.pmf(ip) / probability))
                     sr_probs_dict[(InventoryState(0, order), reward)] = \
                         probability
                     d1[order] = Categorical(sr_probs_dict)
@@ -735,7 +735,24 @@ To avoid terminology confusion, we refer to $V^{\pi}$ as the *State-Value Functi
 V^{\pi}(s) = \sum_{a\in\mathcal{A}} \pi(s, a) \cdot Q^{\pi}(s, a) \text{ for all } s \in \mathcal{N} \label{eq:mdp_bellman_policy_eqn_vq}
 \end{equation}
 
-Combining Equation \eqref{eq:mdp_bellman_policy_eqn_vv} and Equation \eqref{eq:mdp_bellman_policy_eqn_vq} yields:
+Next, we expand $Q^{\pi}(s, a) = \mathbb{E}_{\pi, \mathcal{P}_R}[G_t|S_t=s, A_t=a]$ as follows:
+
+\begin{equation*}
+\begin{split}
+& \mathbb{E}_{\mathcal{P}_R}[R_{t+1}|S_t=s,A_t=a] + \gamma \cdot \mathbb{E}_{\pi, \mathcal{P}_R}[R_{t+2}|S_t=s,A_t=a] + \gamma^2 \cdot \mathbb{E}_{\pi, \mathcal{P}_R}[R_{t+3}|S_t=s,A_t=a] \\
+& \hspace{8mm} + \ldots \\
+& = \mathcal{R}(s,a) + \gamma \cdot \sum_{s'\in \mathcal{N}} \mathcal{P}(s, a, s') \sum_{a'\in \mathcal{A}} \pi(s',a') \cdot \mathcal{R}(s', a') \\
+& \hspace{4mm} + \gamma^2 \cdot \sum_{s' \in \mathcal{N}} \mathcal{P}(s, a', s') \sum_{a'\in \mathcal{A}} \pi(s',a') \sum_{s'' \in \mathcal{N}} \mathcal{P}(s', a'', s'') \sum_{a'' \in \mathcal{A}} \pi(s'',a'') \cdot \mathcal{R}(s'', a'')  \\
+& \hspace{4mm} + \ldots \\
+& = \mathcal{R}(s,a) + \gamma \cdot \sum_{s'\in \mathcal{N}} \mathcal{P}(s, a, s') \cdot \mathcal{R}^{\pi}(s') + \gamma^2 \cdot \sum_{s' \in \mathcal{N}} \mathcal{P}(s, a, s') \sum_{s'' \in \mathcal{N}} \mathcal{P}^{\pi}(s', s'') \cdot \mathcal{R}^{\pi}(s'') + \ldots  \\
+& = \mathcal{R}(s,a) + \gamma \cdot \sum_{s'\in \mathcal{N}} \mathcal{P}(s, a, s') \cdot (\mathcal{R}^{\pi}(s') + \gamma \cdot \sum_{s'' \in \mathcal{N}} \mathcal{P}^{\pi}(s', s'') \cdot \mathcal{R}^{\pi}(s'') + \ldots ) \\
+& = \mathcal{R}(s,a) + \gamma \cdot \sum_{s'\in \mathcal{N}} \mathcal{P}(s, a, s') \cdot V^{\pi}(s')
+\end{split}
+\end{equation*}
+
+The last line in the sequence of equations above is obtained by observing Equation \eqref{eq:mrp_bellman_eqn} in Chapter [-@sec:mrp-chapter], with the MRP Value Function expansion applied to the $\pi$-implied MRP for state $s'$.
+
+Thus, we have:
 \begin{equation}
 Q^{\pi}(s, a) = \mathcal{R}(s,a) + \gamma \cdot \sum_{s'\in \mathcal{N}} \mathcal{P}(s,a,s') \cdot V^{\pi}(s') \text{ for all  } s \in \mathcal{N}, a \in \mathcal{A} \label{eq:mdp_bellman_policy_eqn_qv}
 \end{equation}
