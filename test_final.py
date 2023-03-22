@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Union, Tuple, Dict, Mapping, Callable, Iterable, Iterator, TypeVar, Set, Sequence
 from operator import itemgetter
 import itertools
@@ -15,7 +15,6 @@ from rl.markov_process import MarkovRewardProcess
 from rl.monte_carlo import greedy_policy_from_qvf, epsilon_greedy_policy
 from rl.policy import Policy, DeterministicPolicy, FiniteDeterministicPolicy
 from rl.experience_replay import ExperienceReplayMemory
-from rl.td import q_learning_experience_replay
 from scipy.stats import poisson, nbinom, rv_discrete, rv_continuous
 import time
 
@@ -34,6 +33,65 @@ InvOrderMapping = Mapping[
     InvState,
     Mapping[InvAction, Categorical[Tuple[InvState, float]]]
 ]
+
+A = TypeVar('A')
+S = TypeVar('S')
+
+### Deep Q-Learning with a target and main NN FuncApprox model ###
+from copy import deepcopy
+from rl.td import PolicyFromQType
+def deep_q_learning_experience_replay(
+    mdp: MarkovDecisionProcess[S, A],
+    policy_from_q: PolicyFromQType,
+    states: NTStateDistribution[S],
+    approx_0: DNNApprox[Tuple[NonTerminal[S], A]],
+    γ: float,
+    max_episode_length: int,
+    mini_batch_size: int,
+    weights_decay_half_life: float,
+    main_update_every: int = 4,
+    targ_update_every: int = 100
+) -> Iterator[QValueFunctionApprox[S, A]]:
+    exp_replay: ExperienceReplayMemory[TransitionStep[S, A]] = \
+        ExperienceReplayMemory(
+            #time_weights_func=lambda t: 0.5 ** (t / weights_decay_half_life),
+        )
+    targ_q: DNNApprox[Tuple[NonTerminal[S], A]] = approx_0
+    main_q: DNNApprox[Tuple[NonTerminal[S], A]] = deepcopy(targ_q)
+    yield targ_q
+    while True:
+        state: NonTerminal[S] = states.sample()
+        steps: int = 0
+        while isinstance(state, NonTerminal) and steps < max_episode_length:
+            policy: Policy[S, A] = policy_from_q(main_q, mdp)
+            action: A = policy.act(state).sample() 
+            next_state, reward = mdp.step(state, action).sample()
+            exp_replay.add_data(TransitionStep(
+                state=state,
+                action=action,
+                next_state=next_state,
+                reward=reward
+            ))
+            if steps % main_update_every == 0:
+                trs: Sequence[TransitionStep[S, A]] = \
+                    exp_replay.sample_mini_batch(mini_batch_size)
+                main_q = main_q.update(
+                    [(
+                        (tr.state, tr.action),
+                        tr.reward + γ * (
+                            max(targ_q((tr.next_state, a))
+                                for a in mdp.actions(tr.next_state))
+                            if isinstance(tr.next_state, NonTerminal) else 0.)
+                    ) for tr in trs],
+                )
+            yield targ_q
+            steps += 1
+            state = next_state
+
+        if steps >= min(targ_update_every, max_episode_length):
+            targ_q = replace(targ_q, weights=deepcopy(main_q.weights))
+
+
 
 
 class SimpleTwoInventoryMDPCap(FiniteMarkovDecisionProcess[InvState, InvAction]):
@@ -179,15 +237,15 @@ class TwoInventoryMDPCap(MarkovDecisionProcess[InvState, InvAction]):
             return NonTerminal(InvState(on_hands=new_on_hands, on_orders=new_on_orders)), rewards
 
         return SampledDistribution(sampler=sampler)
-    
 
     def newsvendor(self) -> DeterministicPolicy[InvState, InvAction]:
         frac0 = (self.stockout_costs[0] - self.supply_cost) / (self.stockout_costs[0] + self.holding_costs[0])
         frac1 = (self.stockout_costs[1] - self.supply_cost) / (self.stockout_costs[1] + self.holding_costs[1])
         optimal_holdings: Tuple[float, float] = self.distrs[0].ppf(frac0), self.distrs[1].ppf(frac1)
-        print(optimal_holdings)
         def action_for(state: InvState) -> InvAction:
-            diff = np.rint(np.array(state.inventory_position()) - optimal_holdings).astype(int)
+            diff = np.rint(np.array(state.inventory_position()) - \
+                            (self.distrs[0].stats('m'), self.distrs[1].stats('m')) -\
+                            optimal_holdings).astype(int)
             if diff[0] > 0 and diff[1] < 0:
                 transfer = max(-diff[0], diff[1], -state.on_hands[0])
             elif diff[0] < 0 and diff[1] > 0:
@@ -206,7 +264,7 @@ def evaluate_policy_on_mdp(mdp: MarkovDecisionProcess[InvState, InvAction],
                            gamma: float,
                            start_distrib: NTStateDistribution[InvState],
                            num_traces: int = 100,
-                           num_samples: int = 10):
+                           num_samples: int = 100):
     mrp : MarkovRewardProcess[InvState] = mdp.apply_policy(pol)
     discounts = np.power(gamma * np.ones(num_traces), np.arange(num_traces))
     reward_trace_iter = mrp.reward_traces(start_distrib)
@@ -233,7 +291,10 @@ if __name__ == '__main__':
     user_gamma = 0.95
     
     pois_policies = {}
+    
     '''
+    print('Generating explicit finite MDP...')
+    si_start = time.time()
     si_mdp: FiniteMarkovDecisionProcess[InvState, InvAction] =\
         SimpleTwoInventoryMDPCap(
             capacities=user_capacities,
@@ -243,17 +304,47 @@ if __name__ == '__main__':
             supply_cost=user_supply_cost,
             transfer_cost=user_transfer_cost
         )
+    print('Generated finite MDP. Time elapsed (s): {}'.format(time.time() - si_start))
 
     from rl.dynamic_programming import value_iteration_result
-    
     print("Poisson MDP iteration starting...")
     pois_start = time.time()
     opt_vf_vi, opt_policy_vi = value_iteration_result(si_mdp, gamma=user_gamma)
     print('Completed. Time elapsed (sec) = {}'.format(time.time() - pois_start))
     pois_policies['Optimal'] = opt_policy_vi
     '''
-    #######################################
+    
+    #########################
 
+    # Same MDP as the simple inventory case, except specified without transition dict, only step function.
+    print('Generating implicit (possibly non-finite) MDP with the same mechanics...')
+    t_start = time.time()
+    t_mdp: MarkovDecisionProcess[InvState, InvAction] =\
+        TwoInventoryMDPCap(
+            capacities=user_capacities,
+            holding_costs=user_holding_costs,
+            stockout_costs=user_stockout_costs,
+            supply_cost=user_supply_cost,
+            transfer_cost=user_transfer_cost,
+            distribution=poisson,
+            distr_kwargs=(
+                { 'mu': user_lambdas[0] },
+                { 'mu': user_lambdas[1]}
+            )
+        )
+    print('Generated implicit (possibly non-finite) MDP. Time elapsed (s): {}'.format(time.time() - t_start))
+
+    def t_mdp_sampler():
+        a = np.random.randint(user_capacities[0] + 1)
+        b = np.random.randint(user_capacities[1] + 1)
+        x = np.random.randint(a + 1)
+        y = np.random.randint(b + 1)
+        return NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
+    pois_policies['Newsvendor'] = t_mdp.newsvendor()
+    
+
+    ### Setting up the Deep Q-Learning components
+    # Functions
     ffs : Sequence[Callable[[Tuple[NonTerminal[InvState], InvAction]], float]] = [
         lambda _: 1.,
         lambda x: x[0].state.on_hands[0],
@@ -290,41 +381,17 @@ if __name__ == '__main__':
         mdp: MarkovDecisionProcess[InvState, InvAction],
     ) -> DeterministicPolicy[InvState, InvAction]:
         try:
-            eps_greedy_policy.times_called += 1
+            eps = 2**(- eps_greedy_policy.times_called / 1000)
+            if eps > 0.01:
+                eps_greedy_policy.times_called += 1
         except AttributeError:
+            eps = 1.
             eps_greedy_policy.times_called = 1
-        return epsilon_greedy_policy(q, mdp, 0.9*2**(- eps_greedy_policy.times_called / 1500))
-    
-    #######################
+        return epsilon_greedy_policy(q, mdp, eps)
 
-    # Same MDP as the simple inventory case, except specified without transition dict, only step function.
-    t_mdp: MarkovDecisionProcess[InvState, InvAction] =\
-        TwoInventoryMDPCap(
-            capacities=user_capacities,
-            holding_costs=user_holding_costs,
-            stockout_costs=user_stockout_costs,
-            supply_cost=user_supply_cost,
-            transfer_cost=user_transfer_cost,
-            distribution=poisson,
-            distr_kwargs=(
-                { 'mu': user_lambdas[0] },
-                { 'mu': user_lambdas[1]}
-            )
-        )
-    
-    pois_policies['Newsvendor'] = t_mdp.newsvendor()
-
-    t_mdp_states = [ NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
-                    for a in range(user_capacities[0] + 1)
-                    for b in range(user_capacities[1] + 1)
-                    for x in range(a + 1)
-                    for y in range(b + 1)
-                ]
-    for state in t_mdp_states:
-        print('State: {}, action = {}'.format(state.state, pois_policies['Newsvendor'].act(state).value))
-
+    # Objects
     ds : DNNSpec = DNNSpec(
-        neurons=[256],
+        neurons=[24, 12],
         bias=True,
         hidden_activation=relu,
         hidden_activation_deriv=relu_grad,
@@ -338,44 +405,43 @@ if __name__ == '__main__':
         regularization_coeff=0.05
     )
 
-    def t_mdp_sampler():
-        a = np.random.randint(user_capacities[0] + 1)
-        b = np.random.randint(user_capacities[1] + 1)
-        x = np.random.randint(a + 1)
-        y = np.random.randint(b + 1)
-        return NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
     
+    #### Starting the Deep Q-Learning proper
     qvf2_iter : Iterator[QValueFunctionApprox[InvState, InvAction]] = \
-        q_learning_experience_replay(
+        deep_q_learning_experience_replay(
             mdp= t_mdp,
             policy_from_q= eps_greedy_policy,
             states= SampledDistribution(sampler=t_mdp_sampler),
             approx_0= qvf2_dnn_approx,
             γ= user_gamma,
-            max_episode_length= 500,
+            max_episode_length=100,
             mini_batch_size=128,
             weights_decay_half_life=700
         )
 
+    print('Beginning deep Q-learning...')
     start_time = time.time()
-    for it in range(1, 5001):
+    total_iters = 50 * 100   # should be multiple of max_episode_length above
+    for it in range(1, 1 + total_iters):
         qvf2_approx = next(qvf2_iter)
-        if it % 1000 == 0:
-            print('DQL iteration {} of 5000'.format(it))
+        if it % (total_iters // 10) == 0:
+            print('DQL iteration {} of {}'.format(it, total_iters))
     print('Total time for 5000 iterations: {} seconds'.format(time.time() - start_time))
 
     qvf2_policy : DeterministicPolicy[InvState, InvAction] = \
         greedy_policy_from_qvf(qvf2_approx, t_mdp.actions)
     
     pois_policies['Deep Q-Learning'] = qvf2_policy
+    
 
     start_distrib = Constant(NonTerminal(InvState((0, 0), (0,0))))
     for name, pol in pois_policies.items():
-        print('Discounted rewards of 10 samples w/ 100 steps each of policy: {}\n{}\n'.format(
-            name, evaluate_policy_on_mdp(t_mdp, pol, user_gamma, start_distrib)
+        rewards = evaluate_policy_on_mdp(t_mdp, pol, user_gamma, start_distrib)
+        print('Discounted rewards of 100 samples w/ 100 steps each of policy: {}\n{}\nMean: {}'.format(
+            name, rewards, np.mean(rewards)
         ))
 
-    '''
+    
     t_mdp_states = [ NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
                     for a in range(user_capacities[0] + 1)
                     for b in range(user_capacities[1] + 1)
@@ -384,7 +450,7 @@ if __name__ == '__main__':
                 ]
     for state in t_mdp_states:
         print('State: {}, action = {}'.format(state.state, qvf2_policy.act(state).value))
-    '''
+    
 
     
     
