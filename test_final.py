@@ -182,18 +182,21 @@ class TwoInventoryMDPCap(MarkovDecisionProcess[InvState, InvAction]):
     
 
     def newsvendor(self) -> DeterministicPolicy[InvState, InvAction]:
-        frac0 = (self.stockout_costs[0] - self.supply_costs[0]) / (self.stockout_costs[0] + self.holding_costs[0])
-        frac1 = (self.stockout_costs[1] - self.supply_costs[1]) / (self.stockout_costs[1] + self.holding_costs[1])
+        frac0 = (self.stockout_costs[0] - self.supply_cost) / (self.stockout_costs[0] + self.holding_costs[0])
+        frac1 = (self.stockout_costs[1] - self.supply_cost) / (self.stockout_costs[1] + self.holding_costs[1])
         optimal_holdings: Tuple[float, float] = self.distrs[0].ppf(frac0), self.distrs[1].ppf(frac1)
+        print(optimal_holdings)
         def action_for(state: InvState) -> InvAction:
             diff = np.rint(np.array(state.inventory_position()) - optimal_holdings).astype(int)
             if diff[0] > 0 and diff[1] < 0:
-                transfer = max(-diff[0], diff[1])
+                transfer = max(-diff[0], diff[1], -state.on_hands[0])
             elif diff[0] < 0 and diff[1] > 0:
-                transfer = min(-diff[0], diff[1])
+                transfer = min(-diff[0], diff[1], state.on_hands[1])
             else:
                 transfer = 0
-            return -min(0, diff[0] + transfer), -min(0, diff[1] - transfer), transfer
+            tent_orders = -min(0, diff[0] + transfer), -min(0, diff[1] - transfer)
+            orders = tuple(np.minimum(self.capacities - np.array(state.inventory_position()), tent_orders))
+            return *orders, transfer
 
         return DeterministicPolicy(action_for=action_for)
 
@@ -212,7 +215,7 @@ def evaluate_policy_on_mdp(mdp: MarkovDecisionProcess[InvState, InvAction],
         trace_iter = next(reward_trace_iter)
         for trace in range(num_traces):
             step = next(trace_iter)
-            rewards[sample, trace] = step.state.reward
+            rewards[sample, trace] = step.reward
     return np.sum(rewards * discounts, axis=1)
 
 
@@ -220,16 +223,17 @@ if __name__ == '__main__':
     from pprint import pprint
 
     user_capacities = 8, 7
-    user_ps = 0.3, 0.7
+    user_ps = 0.3, 0.5
     user_lambdas = tuple(np.multiply(user_ps, user_capacities))
     user_holding_costs = 1.0, 4.0
-    user_stockout_costs = 10.0, 100.0
+    user_stockout_costs = 10.0, 20.0
     user_supply_cost = 2.0
     user_transfer_cost = 1.0
 
     user_gamma = 0.95
     
     pois_policies = {}
+    '''
     si_mdp: FiniteMarkovDecisionProcess[InvState, InvAction] =\
         SimpleTwoInventoryMDPCap(
             capacities=user_capacities,
@@ -247,7 +251,7 @@ if __name__ == '__main__':
     opt_vf_vi, opt_policy_vi = value_iteration_result(si_mdp, gamma=user_gamma)
     print('Completed. Time elapsed (sec) = {}'.format(time.time() - pois_start))
     pois_policies['Optimal'] = opt_policy_vi
-    
+    '''
     #######################################
 
     ffs : Sequence[Callable[[Tuple[NonTerminal[InvState], InvAction]], float]] = [
@@ -309,6 +313,15 @@ if __name__ == '__main__':
         )
     
     pois_policies['Newsvendor'] = t_mdp.newsvendor()
+
+    t_mdp_states = [ NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
+                    for a in range(user_capacities[0] + 1)
+                    for b in range(user_capacities[1] + 1)
+                    for x in range(a + 1)
+                    for y in range(b + 1)
+                ]
+    for state in t_mdp_states:
+        print('State: {}, action = {}'.format(state.state, pois_policies['Newsvendor'].act(state).value))
 
     ds : DNNSpec = DNNSpec(
         neurons=[256],
