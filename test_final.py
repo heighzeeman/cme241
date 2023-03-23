@@ -48,7 +48,6 @@ def deep_q_learning_experience_replay(
     γ: float,
     max_episode_length: int,
     mini_batch_size: int,
-    weights_decay_half_life: float,
     main_update_every: int = 4,
     targ_update_every: int = 100
 ) -> Iterator[QValueFunctionApprox[S, A]]:
@@ -292,7 +291,6 @@ if __name__ == '__main__':
     
     pois_policies = {}
     
-    '''
     print('Generating explicit finite MDP...')
     si_start = time.time()
     si_mdp: FiniteMarkovDecisionProcess[InvState, InvAction] =\
@@ -312,7 +310,6 @@ if __name__ == '__main__':
     opt_vf_vi, opt_policy_vi = value_iteration_result(si_mdp, gamma=user_gamma)
     print('Completed. Time elapsed (sec) = {}'.format(time.time() - pois_start))
     pois_policies['Optimal'] = opt_policy_vi
-    '''
     
     #########################
 
@@ -381,7 +378,7 @@ if __name__ == '__main__':
         mdp: MarkovDecisionProcess[InvState, InvAction],
     ) -> DeterministicPolicy[InvState, InvAction]:
         try:
-            eps = 2**(- eps_greedy_policy.times_called / 1000)
+            eps = 2**(- eps_greedy_policy.times_called / 1500)
             if eps > 0.01:
                 eps_greedy_policy.times_called += 1
         except AttributeError:
@@ -415,18 +412,18 @@ if __name__ == '__main__':
             approx_0= qvf2_dnn_approx,
             γ= user_gamma,
             max_episode_length=100,
-            mini_batch_size=128,
-            weights_decay_half_life=700
+            mini_batch_size=128
+            #weights_decay_half_life=2000   # removed, no need to discount later experiences
         )
 
     print('Beginning deep Q-learning...')
     start_time = time.time()
-    total_iters = 50 * 100   # should be multiple of max_episode_length above
+    total_iters = 100 * 100   # should be multiple of max_episode_length above
     for it in range(1, 1 + total_iters):
         qvf2_approx = next(qvf2_iter)
         if it % (total_iters // 10) == 0:
             print('DQL iteration {} of {}'.format(it, total_iters))
-    print('Total time for 5000 iterations: {} seconds'.format(time.time() - start_time))
+    print('Total time for {} iterations: {} seconds'.format(total_iters, time.time() - start_time))
 
     qvf2_policy : DeterministicPolicy[InvState, InvAction] = \
         greedy_policy_from_qvf(qvf2_approx, t_mdp.actions)
@@ -441,7 +438,7 @@ if __name__ == '__main__':
             name, rewards, np.mean(rewards)
         ))
 
-    
+    '''
     t_mdp_states = [ NonTerminal(InvState(on_hands=(x, y), on_orders=(a-x, b-y)))
                     for a in range(user_capacities[0] + 1)
                     for b in range(user_capacities[1] + 1)
@@ -450,7 +447,7 @@ if __name__ == '__main__':
                 ]
     for state in t_mdp_states:
         print('State: {}, action = {}'.format(state.state, qvf2_policy.act(state).value))
-    
+    '''
 
     
     
